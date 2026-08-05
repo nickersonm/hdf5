@@ -72,6 +72,19 @@ const (
 // ReadObjectHeader reads and parses an HDF5 object header from the specified address.
 // It supports both version 1 and version 2 object header formats.
 func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHeader, error) {
+	return readObjectHeader(r, address, sb, false)
+}
+
+// ReadObjectHeaderNoAttrs reads an object header's structure without resolving its attributes.
+//
+// It exists because attribute resolution can follow a fractal heap and a B-tree, and a caller that
+// only wants the messages -- or that is diagnosing why attribute resolution fails -- should not have
+// to succeed at the harder job first.
+func ReadObjectHeaderNoAttrs(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHeader, error) {
+	return readObjectHeader(r, address, sb, true)
+}
+
+func readObjectHeader(r io.ReaderAt, address uint64, sb *Superblock, skipAttrs bool) (*ObjectHeader, error) {
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	offset := int64(address)
 	if offset < 0 {
@@ -144,15 +157,18 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		}
 	}
 
-	// Parse attributes from messages (both compact and dense)
+	if skipAttrs {
+		return header, nil
+	}
+
+	// Parse attributes from messages (both compact and dense).
+	//
+	// A failure here is returned rather than discarded. It used to be swallowed, on the reasoning that attributes are optional -- but "this object has no attributes" and "this object's attributes could not be read" are different answers, and collapsing them reported the first when the second was true. An object with no attributes does not reach this error path at all: ParseAttributesFromMessages returns an empty list and no error when there is nothing to parse.
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
 	if err != nil {
-		// Don't fail the whole header read if attributes fail
-		// Attributes are optional - continue without them
-		_ = err
-	} else {
-		header.Attributes = attributes
+		return nil, fmt.Errorf("reading attributes of the object at 0x%X: %w", address, err)
 	}
+	header.Attributes = attributes
 
 	return header, nil
 }

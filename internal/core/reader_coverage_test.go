@@ -254,7 +254,7 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	bthd[4] = 0                                          // version
 	bthd[5] = 8                                          // type (attribute name index)
 	binary.LittleEndian.PutUint32(bthd[6:10], 4096)      // node size
-	binary.LittleEndian.PutUint16(bthd[10:12], 11)       // record size (4 hash + 7 heapID)
+	binary.LittleEndian.PutUint16(bthd[10:12], 17)       // record size: 8 heapID + 1 flags + 4 creation order + 4 hash
 	binary.LittleEndian.PutUint16(bthd[12:14], 0)        // depth (0 = leaf root)
 	bthd[14] = 75                                        // split %
 	bthd[15] = 40                                        // merge %
@@ -267,10 +267,8 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	copy(btlf[0:4], "BTLF")
 	btlf[4] = 0 // version
 	btlf[5] = 8 // type
-	// Record: hash(4) + heapID(7)
+	// A type 8 record leads with the heap ID: heapID(8) + flags(1) + creation order(4) + hash(4).
 	offset := 6
-	binary.LittleEndian.PutUint32(btlf[offset:offset+4], 0xAABBCCDD) // name hash
-	offset += 4
 	// Heap ID for managed object: type=0 (bits 4-5 of byte 0), offset in heap, length.
 	// We need HeapOffsetSize and HeapLengthSize from the FRHP header.
 	// With MaxHeapSize=16 => HeapOffsetSize = ceil(16/8) = 2.
@@ -278,10 +276,11 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	//   HeapLengthSize = min(computeOffsetSize(4096), computeOffsetSize(512))
 	//   = min(2, 2) = 2.
 	// So heap ID: byte0(type=0) + 2-byte offset + 2-byte length + 2 unused = 7 bytes.
-	heapIDBytes := [7]byte{}
+	heapIDBytes := [8]byte{}
 	heapIDBytes[0] = 0x00 // type=0 (managed)
-	// Offset = 0 (start of direct block data).
-	heapIDBytes[1] = 0
+	// Offset = 15, the heap offset of the object. The heap's linear managed space includes the direct
+	// block's own 15-byte header, so the data placed at fhdb[15:] is at heap offset 15, not 0.
+	heapIDBytes[1] = 15
 	heapIDBytes[2] = 0
 	// Length = len(attrMsg).
 	heapIDBytes[3] = byte(len(attrMsg) & 0xFF)
@@ -289,7 +288,13 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	// Unused padding.
 	heapIDBytes[5] = 0
 	heapIDBytes[6] = 0
-	copy(btlf[offset:offset+7], heapIDBytes[:])
+	copy(btlf[offset:offset+8], heapIDBytes[:])
+	offset += 8
+	btlf[offset] = 0 // message flags
+	offset++
+	binary.LittleEndian.PutUint32(btlf[offset:offset+4], 0) // creation order
+	offset += 4
+	binary.LittleEndian.PutUint32(btlf[offset:offset+4], 0xAABBCCDD) // name hash
 
 	// --- FRHP at 0x0300 ---
 	frhp := buf[frhpAddr:]
@@ -357,7 +362,7 @@ func TestReadDenseAttributes_InvalidHeapHeader(t *testing.T) {
 	bthd[4] = 0
 	bthd[5] = 8
 	binary.LittleEndian.PutUint32(bthd[6:10], 4096)
-	binary.LittleEndian.PutUint16(bthd[10:12], 11)
+	binary.LittleEndian.PutUint16(bthd[10:12], 17)
 	binary.LittleEndian.PutUint16(bthd[12:14], 0)
 	bthd[14] = 75
 	bthd[15] = 40

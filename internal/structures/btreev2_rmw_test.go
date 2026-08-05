@@ -464,10 +464,12 @@ func TestBTreeV2LoadFromFile_HeapIDPreservation(t *testing.T) {
 	// Verify heap IDs are preserved (first 7 bytes)
 	for i, name := range names {
 		expectedHash := jenkinsHash(name)
-		var expectedHeapID [7]byte
-		var temp [8]byte
-		binary.LittleEndian.PutUint64(temp[:], heapIDs[i])
-		copy(expectedHeapID[:], temp[:7])
+		// Heap IDs are held in eight bytes now, because a type 8 attribute record carries all eight
+		// where a type 5 link record carries seven. A link-name tree writes and reads back only the
+		// first seven, so the eighth stays zero.
+		var expectedHeapID [8]byte
+		binary.LittleEndian.PutUint64(expectedHeapID[:], heapIDs[i])
+		expectedHeapID[7] = 0
 
 		// Find record
 		found := false

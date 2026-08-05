@@ -162,7 +162,7 @@ func TestParseHeapID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			offset, length, err := parseHeapID(tt.heapID, tt.header)
+			offset, length, err := parseHeapID(tt.heapID[:], tt.header)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -193,7 +193,7 @@ func TestParseHeapID_EdgeCases(t *testing.T) {
 			HeapLengthSize: 2,
 		}
 
-		offset, length, err := parseHeapID(heapID, header)
+		offset, length, err := parseHeapID(heapID[:], header)
 		require.NoError(t, err)
 		require.Equal(t, uint64(0x0012), offset)
 		require.Equal(t, uint64(0x0034), length)
@@ -210,7 +210,7 @@ func TestParseHeapID_EdgeCases(t *testing.T) {
 			HeapLengthSize: 3,
 		}
 
-		offset, length, err := parseHeapID(heapID, header)
+		offset, length, err := parseHeapID(heapID[:], header)
 		require.NoError(t, err)
 		require.Equal(t, uint64(0xFFFFFF), offset)
 		require.Equal(t, uint64(0xFFFFFF), length)

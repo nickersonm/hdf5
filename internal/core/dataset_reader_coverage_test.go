@@ -838,7 +838,7 @@ func TestParseHeapID_UnsupportedType(t *testing.T) {
 
 	// Heap ID with type=1 (huge) instead of type=0 (managed).
 	heapID := [7]byte{0x10, 0, 0, 0, 0, 0, 0} // Type 1 in bits 4-5
-	_, _, err := parseHeapID(heapID, heapHeader)
+	_, _, err := parseHeapID(heapID[:], heapHeader)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported heap ID type")
 }
@@ -862,7 +862,7 @@ func TestParseHeapID_Managed(t *testing.T) {
 	heapID[5] = 0x50
 	heapID[6] = 0x00
 
-	offset, length, err := parseHeapID(heapID, heapHeader)
+	offset, length, err := parseHeapID(heapID[:], heapHeader)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0x100), offset)
 	require.Equal(t, uint64(0x50), length)
