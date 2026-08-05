@@ -659,7 +659,8 @@ func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, recor
 	if string(buf[0:4]) != "BTLF" {
 		return nil, fmt.Errorf("invalid B-tree v2 leaf signature: %q", buf[0:4])
 	}
-	// The leaf repeats the header's type, and disagreeing with it means one of the two addresses is wrong. Reading on regardless is how a wrong record layout turns into plausible garbage rather than an error.
+	// The leaf repeats the header's type. Disagreement means one of the two addresses is wrong, and
+	// reading on regardless is how a wrong layout becomes plausible garbage instead of an error.
 	if got := buf[5]; got != recordType {
 		return nil, fmt.Errorf("b-tree leaf at 0x%X is type %d but its header says type %d", addr, got, recordType)
 	}
@@ -684,7 +685,9 @@ func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, recor
 
 // btreeV2Layout describes where a heap ID sits inside one version 2 B-tree record.
 //
-// The type byte in the B-tree header selects this, and it is not decoration: a dense LINK name index and a dense ATTRIBUTE name index are different record layouts of different sizes, and reading one as the other yields a heap ID assembled from the middle of two adjacent records. That produces an offset and a length that are structurally valid and completely wrong, which is why it fails deep inside a heap read rather than at the record.
+// The type byte in the header selects it. Reading one layout as the other assembles a heap ID from
+// the middle of two adjacent records, giving an offset and a length that are structurally valid and
+// wrong -- which is why it fails deep inside a heap read rather than at the record.
 type btreeV2Layout struct {
 	size      uint16 // total record size in bytes
 	heapIDAt  uint16 // offset of the heap ID within the record
@@ -697,12 +700,14 @@ const (
 	BTreeV2TypeAttributeName uint8 = 8 // dense attribute name index
 )
 
-// btreeV2RecordLayout returns the record layout for a B-tree type, rejecting the types this package cannot read rather than guessing at one.
+// btreeV2RecordLayout returns the record layout for a B-tree type, rejecting types this package
+// cannot read rather than guessing at one.
 //
 //	type 5, 11 bytes: 4-byte name hash, then a 7-byte heap ID
-//	type 8, 17 bytes: an 8-byte heap ID, 1-byte message flags, 4-byte creation order, 4-byte name hash
+//	type 8, 17 bytes: 8-byte heap ID, 1-byte message flags, 4-byte creation order, 4-byte name hash
 //
-// The declared record size is checked rather than trusted, because a mismatch means the header and the layout disagree about what the file holds and every record read afterwards would be off by the difference.
+// The declared record size is checked rather than trusted: a mismatch means the header and the
+// layout disagree, and every record after the first would be off by the difference.
 func btreeV2RecordLayout(recordType uint8, recordSize uint16) (btreeV2Layout, error) {
 	var l btreeV2Layout
 	switch recordType {
@@ -867,7 +872,8 @@ func computeOffsetSize(value uint64) uint8 {
 //   - Bytes 1-4: Offset (uint32, little-endian)
 //   - Bytes 5-6: Length (uint16, little-endian)
 func parseHeapID(heapID []byte, header *fractalHeapHeaderRaw) (offset, length uint64, err error) {
-	// Seven bytes for a link name record, eight for an attribute name record. Anything shorter cannot carry the type bits plus an offset and a length.
+	// 7 bytes for a link name record, 8 for an attribute name record. Anything shorter cannot carry
+	// the type bits plus an offset and a length.
 	if len(heapID) < 3 {
 		return 0, 0, fmt.Errorf("heap ID is %d bytes, too short to parse", len(heapID))
 	}
@@ -951,18 +957,14 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 	}
 	relativeOffset := offset - blockOffset
 
-	// There is ONE convention, not two. A heap ID's offset is measured in the heap's linear managed
-	// address space, and a direct block occupies that space from its own BlockOffset onwards --
-	// header included. So the object always sits at blockAddr + (offset - blockOffset), which is what
-	// the reference library computes, whether or not direct blocks carry checksums. The checksum flag
-	// changes the header's SIZE, not where the address space starts.
+	// One convention, not two. A heap offset is measured in the heap's linear managed space, which a
+	// direct block occupies from its own BlockOffset onwards, header included, so an object always
+	// sits at blockAddr + (offset - blockOffset). The checksum flag changes the header's SIZE, not
+	// where that space starts.
 	//
-	// This used to branch: raw relative offset when checksummed, and relative offset PLUS the header
-	// size otherwise, the second branch justified as matching "scigolib's writer fixtures". It was
-	// matching a defect. The writer emitted heap IDs whose offsets ignored the direct block header,
-	// and this branch added it back so the two agreed with each other -- which is exactly why files
-	// this package wrote were unreadable by the reference library while its own round trip passed.
-	// With the writer corrected, keeping the branch would double-count the header.
+	// This used to branch, adding the header size back for un-checksummed blocks to match the
+	// writer -- which emitted offsets that skipped it. The two agreed with each other and with
+	// nothing else. With the writer corrected, the branch would double-count.
 	objectAddr := blockAddr + relativeOffset
 	// An offset that lands inside the block's own header is not an object; it is a sign the ID was
 	// decoded with the wrong widths.

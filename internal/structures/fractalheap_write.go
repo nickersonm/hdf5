@@ -145,11 +145,13 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 
 		MaxManagedObjectSize: DefaultMaxManagedObjectSize,
 		NextHugeObjectID:     0,
-		// UndefinedAddress, not zero. Zero is a perfectly valid file address -- it is where the superblock lives -- so a zero here tells the reference library there IS a huge-object B-tree and sends it to parse the superblock as one. That is what the "Pinned entry count not decreasing" failure in its metadata cache was.
+		// UndefinedAddress, not zero. Zero is a valid file address -- the superblock's -- so a zero
+		// here tells the reference library a huge-object B-tree exists and sends it to parse the
+		// superblock as one. That was the "Pinned entry count not decreasing" metadata-cache failure.
 		HugeObjectBTreeAddr: UndefinedAddress,
 
 		FreeSpace: blockSize, // Initially all free
-		// Undefined for the same reason: there is no free space manager, and saying so means the undefined address rather than address zero.
+		// Undefined for the same reason: absent means the undefined address, not address zero.
 		FreeSectionAddress: UndefinedAddress,
 
 		ManagedSpaceSize:      blockSize,
@@ -354,13 +356,9 @@ func (fh *WritableFractalHeap) insertViaDirect(data []byte) ([]byte, error) {
 	fh.Header.NumManagedObjects++
 	fh.Header.FreeSpace -= dataSize
 
-	// Create heap ID for managed object.
-	//
-	// The offset is measured in the heap's linear managed space, and a direct block's own header
-	// occupies the start of that space -- the reference library resolves an object to
-	// blockAddress + (heapOffset - blockOffset), so an offset that ignores the header resolves onto
-	// the block's "FHDB" signature instead of the object. Objects is indexed from zero, so the two
-	// differ by exactly the header size.
+	// Heap offsets are measured in the heap's linear managed space, which includes the block's own
+	// header; Objects is indexed from the block's data. The reference library resolves an object to
+	// blockAddress + (heapOffset - blockOffset), so an offset that omits the header lands on FHDB.
 	heapID := fh.encodeHeapID(fh.DirectBlock.BlockOffset+fh.directBlockHeaderSize()+objectOffset, dataSize)
 
 	return heapID, nil
@@ -457,13 +455,8 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 	fh.Header.NumManagedObjects++
 	fh.Header.FreeSpace -= dataSize
 
-	// Create heap ID.
-	//
-	// Offset is the block's own offset in heap space, plus that block's header, plus the object's
-	// position within the block's data. The header term is the same correction the direct path needs
-	// and for the same reason: the reference library resolves an object to
-	// blockAddress + (heapOffset - blockOffset), so an offset that skips the header lands on the
-	// block's FHDB signature.
+	// Block offset in heap space, plus that block's header, plus the object's position in its data.
+	// The header term is the same correction the direct path needs, for the same reason.
 	globalOffset := targetOffset + fh.directBlockHeaderSize() + objectOffset
 	heapID := fh.encodeHeapID(globalOffset, dataSize)
 

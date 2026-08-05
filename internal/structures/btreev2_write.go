@@ -114,20 +114,15 @@ type BTreeV2LeafNode struct {
 //   - Encoding: H5Gbtree2.c - H5G__dense_btree2_name_encode()
 type LinkNameRecord struct {
 	NameHash uint32  // Jenkins hash of the link or attribute name
-	HeapID   [8]byte // Fractal heap ID. A type 5 link record stores the first SEVEN of these bytes; a type 8 attribute record stores all eight.
+	HeapID   [8]byte // Fractal heap ID: a type 5 record stores the first 7 bytes, a type 8 record all 8
 }
 
-// B-tree v2 record types. The numbering is the specification's, and the two differ in more than a
-// label: a link name record is 11 bytes of {4-byte hash, 7-byte heap ID} and an attribute name
-// record is 17 bytes of {8-byte heap ID, 1-byte message flags, 4-byte creation order, 4-byte hash}.
-//
-// Writing attribute records through the link layout produces a B-tree the reference library reads
-// as links, walking into the middle of records it believes are 11 bytes long. That failed inside
-// libhdf5's metadata cache rather than at the record, which is why it took so long to place.
-const (
-	BTreeV2TypeLinkName      = uint8(5)
-	BTreeV2TypeAttributeName = uint8(8)
-)
+// BTreeV2TypeAttributeName is the dense attribute name index, as distinct from
+// BTreeV2TypeLinkNameIndex. They differ in record layout, not just in label: a link record is 11
+// bytes of {4-byte hash, 7-byte heap ID}, an attribute record 17 bytes of {8-byte heap ID, 1-byte
+// message flags, 4-byte creation order, 4-byte hash}. Writing one through the other's layout gives
+// the reference library records it reads at the wrong stride.
+const BTreeV2TypeAttributeName = uint8(8)
 
 // recordSizeFor returns the on-disk record size for a B-tree v2 type.
 func recordSizeFor(recordType uint8) uint16 {
@@ -170,7 +165,7 @@ type WritableBTreeV2 struct {
 // Returns:
 //   - *WritableBTreeV2: B-tree structure ready for record insertion
 func NewWritableBTreeV2(nodeSize uint32) *WritableBTreeV2 {
-	return NewWritableBTreeV2WithType(nodeSize, BTreeV2TypeLinkName)
+	return NewWritableBTreeV2WithType(nodeSize, BTreeV2TypeLinkNameIndex)
 }
 
 // NewWritableBTreeV2WithType creates a B-tree v2 that indexes the given record kind.
@@ -706,8 +701,8 @@ func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *co
 	// 2. Validate header. Both indexed kinds are accepted and the loaded type wins over whatever this
 	// value was constructed for -- a read-modify-write must round-trip the file's own layout, not
 	// re-stamp it with the caller's assumption.
-	if header.Type != BTreeV2TypeLinkName && header.Type != BTreeV2TypeAttributeName {
-		return fmt.Errorf("%w: expected type %d or %d, got %d", ErrInvalidBTreeType, BTreeV2TypeLinkName, BTreeV2TypeAttributeName, header.Type)
+	if header.Type != BTreeV2TypeLinkNameIndex && header.Type != BTreeV2TypeAttributeName {
+		return fmt.Errorf("%w: expected type %d or %d, got %d", ErrInvalidBTreeType, BTreeV2TypeLinkNameIndex, BTreeV2TypeAttributeName, header.Type)
 	}
 	bt.recordType = header.Type
 

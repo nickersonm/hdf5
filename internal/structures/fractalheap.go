@@ -419,8 +419,7 @@ func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
 
 	relativeOffset := id.Offset - dblock.BlockOffset
 
-	// dblock.Data is the block's DATA, which begins after its header, while a heap offset is measured
-	// in heap space and includes that header. The two differ by exactly the header size.
+	// dblock.Data begins after the block header, while a heap offset includes it.
 	blockHeaderSize := uint64(4 + 1 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize))
 	if fh.Header.ChecksumDirectBlocks {
 		blockHeaderSize += 4
