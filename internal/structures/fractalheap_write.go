@@ -457,9 +457,14 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 	fh.Header.NumManagedObjects++
 	fh.Header.FreeSpace -= dataSize
 
-	// Create heap ID
-	// Offset is: block offset + object offset within block
-	globalOffset := targetOffset + objectOffset
+	// Create heap ID.
+	//
+	// Offset is the block's own offset in heap space, plus that block's header, plus the object's
+	// position within the block's data. The header term is the same correction the direct path needs
+	// and for the same reason: the reference library resolves an object to
+	// blockAddress + (heapOffset - blockOffset), so an offset that skips the header lands on the
+	// block's FHDB signature.
+	globalOffset := targetOffset + fh.directBlockHeaderSize() + objectOffset
 	heapID := fh.encodeHeapID(globalOffset, dataSize)
 
 	return heapID, nil
@@ -974,7 +979,16 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 }
 
 // getObjectFromDirect retrieves object from direct block root.
+//
+// The offset arrives in heap space, which includes the block's own header; Objects is indexed from
+// the start of the block's DATA. The two differ by the header size.
 func (fh *WritableFractalHeap) getObjectFromDirect(offset, length uint64) ([]byte, error) {
+	base := fh.DirectBlock.BlockOffset + fh.directBlockHeaderSize()
+	if offset < base {
+		return nil, fmt.Errorf("%w: offset %d lands inside the block header", ErrObjectNotFound, offset)
+	}
+	offset -= base
+
 	// Validate offset and length
 	if offset >= uint64(len(fh.DirectBlock.Objects)) {
 		return nil, fmt.Errorf("%w: offset %d >= used space %d", ErrObjectNotFound, offset, len(fh.DirectBlock.Objects))
@@ -1001,8 +1015,13 @@ func (fh *WritableFractalHeap) getObjectFromIndirect(globalOffset, length uint64
 	for blockOffset, block := range fh.DirectBlocks {
 		blockEnd := blockOffset + block.Size
 		if globalOffset >= blockOffset && globalOffset < blockEnd {
-			// Object is in this block
+			// Object is in this block. The heap offset includes the block's header; Objects is indexed
+			// from the block's data.
 			localOffset := globalOffset - blockOffset
+			if localOffset < fh.directBlockHeaderSize() {
+				return nil, fmt.Errorf("%w: offset %d lands inside the block header", ErrObjectNotFound, globalOffset)
+			}
+			localOffset -= fh.directBlockHeaderSize()
 
 			// Validate offset within block
 			if localOffset >= uint64(len(block.Objects)) {
@@ -1066,6 +1085,13 @@ func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
 	idx := 1
 	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
+
+	// Heap space includes the block's own header; Objects is indexed from the block's data.
+	if base := fh.DirectBlock.BlockOffset + fh.directBlockHeaderSize(); offset >= base {
+		offset -= base
+	} else {
+		return fmt.Errorf("%w: offset %d lands inside the block header", ErrObjectNotFound, offset)
+	}
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
@@ -1135,6 +1161,13 @@ func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 	idx := 1
 	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
+
+	// Heap space includes the block's own header; Objects is indexed from the block's data.
+	if base := fh.DirectBlock.BlockOffset + fh.directBlockHeaderSize(); offset >= base {
+		offset -= base
+	} else {
+		return fmt.Errorf("%w: offset %d lands inside the block header", ErrObjectNotFound, offset)
+	}
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 

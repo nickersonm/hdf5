@@ -951,24 +951,25 @@ func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superbl
 	}
 	relativeOffset := offset - blockOffset
 
-	// When ChecksumDirBlocks is set, the heap-address-space origin sits at
-	// the START of the FHDB block (so heap-id offset 21 maps to FHDB byte
-	// 21 — the first byte AFTER header + checksum). When the flag is
-	// clear, the origin sits at the start of the managed-object area
-	// (so heap-id offset 0 maps to the byte right after the header).
+	// There is ONE convention, not two. A heap ID's offset is measured in the heap's linear managed
+	// address space, and a direct block occupies that space from its own BlockOffset onwards --
+	// header included. So the object always sits at blockAddr + (offset - blockOffset), which is what
+	// the reference library computes, whether or not direct blocks carry checksums. The checksum flag
+	// changes the header's SIZE, not where the address space starts.
 	//
-	// We collapse these two conventions by using the raw relative offset
-	// when checksum is present (header bytes are part of the heap address
-	// space), and adding headerOffset otherwise. The first branch is what
-	// netCDF-4 / hdf5 1.10.x emit; the second matches scigolib's writer
-	// fixtures and pre-1.10 files.
-	var objectAddr uint64
-	if header.ChecksumDirBlocks {
-		objectAddr = blockAddr + relativeOffset
-	} else {
-		//nolint:gosec // G115: headerOffset bounded by header size specification
-		objectAddr = blockAddr + uint64(headerOffset) + relativeOffset
+	// This used to branch: raw relative offset when checksummed, and relative offset PLUS the header
+	// size otherwise, the second branch justified as matching "scigolib's writer fixtures". It was
+	// matching a defect. The writer emitted heap IDs whose offsets ignored the direct block header,
+	// and this branch added it back so the two agreed with each other -- which is exactly why files
+	// this package wrote were unreadable by the reference library while its own round trip passed.
+	// With the writer corrected, keeping the branch would double-count the header.
+	objectAddr := blockAddr + relativeOffset
+	// An offset that lands inside the block's own header is not an object; it is a sign the ID was
+	// decoded with the wrong widths.
+	if relativeOffset < uint64(headerOffset) {
+		return nil, fmt.Errorf("heap object offset 0x%X lands inside the direct block header (%d bytes)", offset, headerOffset)
 	}
+
 	objectData := make([]byte, length)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface

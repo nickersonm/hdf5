@@ -278,8 +278,9 @@ func TestReadDenseAttributes_EndToEnd(t *testing.T) {
 	// So heap ID: byte0(type=0) + 2-byte offset + 2-byte length + 2 unused = 7 bytes.
 	heapIDBytes := [8]byte{}
 	heapIDBytes[0] = 0x00 // type=0 (managed)
-	// Offset = 0 (start of direct block data).
-	heapIDBytes[1] = 0
+	// Offset = 15, the heap offset of the object. The heap's linear managed space includes the direct
+	// block's own 15-byte header, so the data placed at fhdb[15:] is at heap offset 15, not 0.
+	heapIDBytes[1] = 15
 	heapIDBytes[2] = 0
 	// Length = len(attrMsg).
 	heapIDBytes[3] = byte(len(attrMsg) & 0xFF)

@@ -996,8 +996,13 @@ func TestReadHeapObject_Valid(t *testing.T) {
 	}
 
 	// Construct a minimal FHDB direct block.
-	// Header: "FHDB" (4) + version (1) + heap header addr (8) + block offset (2) = 15 bytes
-	// Then the object data at offset 0 within the block.
+	// Header: "FHDB" (4) + version (1) + heap header addr (8) + block offset (2) = 15 bytes.
+	//
+	// The object's HEAP offset is 15, not 0. A heap ID's offset is measured in the heap's linear
+	// managed space, and the block occupies that space from its own BlockOffset onwards -- header
+	// included. This fixture asked for offset 0, which is the block's own signature; it passed only
+	// because the reader used to add the header size back for un-checksummed blocks, a special case
+	// that existed to match the writer's matching mistake.
 	headerSize := 4 + 1 + 8 + 2
 	objectData := []byte("hello, heap object data!")
 	buf := make([]byte, headerSize+len(objectData)+16)
@@ -1018,8 +1023,8 @@ func TestReadHeapObject_Valid(t *testing.T) {
 
 	reader := bytes.NewReader(buf)
 
-	// Read object at heap offset 0, length = len(objectData).
-	result, err := readHeapObject(reader, 0, 0, uint64(len(objectData)), sb, header)
+	// Read object at its heap offset, which is the header size.
+	result, err := readHeapObject(reader, 0, uint64(headerSize), uint64(len(objectData)), sb, header)
 	require.NoError(t, err)
 	require.Equal(t, objectData, result)
 }
@@ -1037,7 +1042,7 @@ func TestReadHeapObject_WithOffset(t *testing.T) {
 		ChecksumDirBlocks: false,
 	}
 
-	// Direct block with block offset = 0, object at relative offset 5.
+	// Direct block with block offset = 0, object five bytes past the block header.
 	headerSize := 4 + 1 + 8 + 2
 	padding := make([]byte, 5)   // 5 bytes before the object
 	objectData := []byte("data") // 4 bytes of data
@@ -1058,8 +1063,8 @@ func TestReadHeapObject_WithOffset(t *testing.T) {
 
 	reader := bytes.NewReader(buf)
 
-	// Object is at heap offset 5, length 4.
-	result, err := readHeapObject(reader, 0, 5, 4, sb, header)
+	// Object is at heap offset headerSize+5, length 4.
+	result, err := readHeapObject(reader, 0, uint64(headerSize+len(padding)), 4, sb, header)
 	require.NoError(t, err)
 	require.Equal(t, objectData, result)
 }
