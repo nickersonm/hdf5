@@ -145,10 +145,12 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 
 		MaxManagedObjectSize: DefaultMaxManagedObjectSize,
 		NextHugeObjectID:     0,
-		HugeObjectBTreeAddr:  0,
+		// UndefinedAddress, not zero. Zero is a perfectly valid file address -- it is where the superblock lives -- so a zero here tells the reference library there IS a huge-object B-tree and sends it to parse the superblock as one. That is what the "Pinned entry count not decreasing" failure in its metadata cache was.
+		HugeObjectBTreeAddr: UndefinedAddress,
 
-		FreeSpace:          blockSize, // Initially all free
-		FreeSectionAddress: 0,         // No free space manager in MVP
+		FreeSpace: blockSize, // Initially all free
+		// Undefined for the same reason: there is no free space manager, and saying so means the undefined address rather than address zero.
+		FreeSectionAddress: UndefinedAddress,
 
 		ManagedSpaceSize:      blockSize,
 		AllocatedManagedSpace: blockSize,
@@ -352,9 +354,14 @@ func (fh *WritableFractalHeap) insertViaDirect(data []byte) ([]byte, error) {
 	fh.Header.NumManagedObjects++
 	fh.Header.FreeSpace -= dataSize
 
-	// Create heap ID for managed object
-	// Format: [flags | offset | length]
-	heapID := fh.encodeHeapID(objectOffset, dataSize)
+	// Create heap ID for managed object.
+	//
+	// The offset is measured in the heap's linear managed space, and a direct block's own header
+	// occupies the start of that space -- the reference library resolves an object to
+	// blockAddress + (heapOffset - blockOffset), so an offset that ignores the header resolves onto
+	// the block's "FHDB" signature instead of the object. Objects is indexed from zero, so the two
+	// differ by exactly the header size.
+	heapID := fh.encodeHeapID(fh.DirectBlock.BlockOffset+fh.directBlockHeaderSize()+objectOffset, dataSize)
 
 	return heapID, nil
 }
@@ -466,6 +473,13 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 // - Bytes N+1-M: Variable-length encoded length
 //
 // Reference: H5HFpkg.h - H5HF_MAN_ID_ENCODE macro.
+// directBlockHeaderSize is what a direct block spends before its object data: signature, version,
+// the heap header address, and the block's own offset. The file offset size is 8 everywhere this
+// package writes.
+func (fh *WritableFractalHeap) directBlockHeaderSize() uint64 {
+	return 4 + 1 + 8 + uint64(fh.Header.HeapOffsetSize)
+}
+
 func (fh *WritableFractalHeap) encodeHeapID(offset, length uint64) []byte {
 	// Always use the configured heap ID length (typically 8 bytes)
 	// This matches what HDF5 expects - fixed size heap IDs

@@ -18,6 +18,12 @@ import (
 // Limitations (v0.10.0-beta):
 // - Only direct blocks supported (no indirect blocks)
 // - No huge objects support (objects stored outside heap)
+
+// UndefinedAddress is HDF5's "this address is not set" value: all bits one, truncated to the file's
+// offset size. It is NOT zero -- zero is the address of the superblock -- so a structure that means
+// "absent" and writes zero is pointing the reader at the start of the file.
+const UndefinedAddress = ^uint64(0)
+
 // - No tiny objects optimization
 // - Objects must be < max_direct_size.
 type FractalHeap struct {

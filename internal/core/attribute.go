@@ -489,7 +489,7 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 	}
 
 	// Step 2: Read B-tree leaf node to get all heap IDs
-	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, sb)
+	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, btreeHeader.Type, btreeHeader.RecordSize, sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read B-tree leaf: %w", err)
 	}
@@ -636,11 +636,14 @@ func readBTreeV2HeaderRaw(r io.ReaderAt, addr uint64, sb *Superblock) (*btreeV2H
 //   - Records (N × record size):
 //     Each record: Name Hash (4 bytes) + Heap ID (7 bytes)
 //   - Checksum (4 bytes)
-func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, _ *Superblock) ([][7]byte, error) {
-	// Each record: 4 (hash) + 7 (heap ID) = 11 bytes
-	// Header: 4 (sig) + 1 (ver) + 1 (type) = 6 bytes
-	// Checksum: 4 bytes
-	bufSize := 6 + int(numRecords)*11 + 4
+func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, recordType uint8, recordSize uint16, _ *Superblock) ([][]byte, error) {
+	layout, err := btreeV2RecordLayout(recordType, recordSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Header: 4 (sig) + 1 (ver) + 1 (type) = 6 bytes, then the records, then a 4-byte checksum.
+	bufSize := 6 + int(numRecords)*int(layout.size) + 4
 	buf := make([]byte, bufSize)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
@@ -656,24 +659,64 @@ func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, _ *Su
 	if string(buf[0:4]) != "BTLF" {
 		return nil, fmt.Errorf("invalid B-tree v2 leaf signature: %q", buf[0:4])
 	}
+	// The leaf repeats the header's type, and disagreeing with it means one of the two addresses is wrong. Reading on regardless is how a wrong record layout turns into plausible garbage rather than an error.
+	if got := buf[5]; got != recordType {
+		return nil, fmt.Errorf("b-tree leaf at 0x%X is type %d but its header says type %d", addr, got, recordType)
+	}
 
 	// Skip version (1) and type (1)
 	offset := 6
 
-	// Read records
-	heapIDs := make([][7]byte, numRecords)
+	heapIDs := make([][]byte, numRecords)
 	for i := uint16(0); i < numRecords; i++ {
-		if offset+11 > len(buf) {
+		if offset+int(layout.size) > len(buf) {
 			return nil, fmt.Errorf("buffer too short for record %d", i)
 		}
-
-		// Skip name hash (4 bytes), copy heap ID (7 bytes)
-		offset += 4
-		copy(heapIDs[i][:], buf[offset:offset+7])
-		offset += 7
+		rec := buf[offset : offset+int(layout.size)]
+		id := make([]byte, layout.heapIDLen)
+		copy(id, rec[layout.heapIDAt:layout.heapIDAt+layout.heapIDLen])
+		heapIDs[i] = id
+		offset += int(layout.size)
 	}
 
 	return heapIDs, nil
+}
+
+// btreeV2Layout describes where a heap ID sits inside one version 2 B-tree record.
+//
+// The type byte in the B-tree header selects this, and it is not decoration: a dense LINK name index and a dense ATTRIBUTE name index are different record layouts of different sizes, and reading one as the other yields a heap ID assembled from the middle of two adjacent records. That produces an offset and a length that are structurally valid and completely wrong, which is why it fails deep inside a heap read rather than at the record.
+type btreeV2Layout struct {
+	size      uint16 // total record size in bytes
+	heapIDAt  uint16 // offset of the heap ID within the record
+	heapIDLen uint16 // heap ID width
+}
+
+// B-tree v2 record types used for dense storage. The numbering is the specification's.
+const (
+	BTreeV2TypeLinkName      uint8 = 5 // dense group link name index
+	BTreeV2TypeAttributeName uint8 = 8 // dense attribute name index
+)
+
+// btreeV2RecordLayout returns the record layout for a B-tree type, rejecting the types this package cannot read rather than guessing at one.
+//
+//	type 5, 11 bytes: 4-byte name hash, then a 7-byte heap ID
+//	type 8, 17 bytes: an 8-byte heap ID, 1-byte message flags, 4-byte creation order, 4-byte name hash
+//
+// The declared record size is checked rather than trusted, because a mismatch means the header and the layout disagree about what the file holds and every record read afterwards would be off by the difference.
+func btreeV2RecordLayout(recordType uint8, recordSize uint16) (btreeV2Layout, error) {
+	var l btreeV2Layout
+	switch recordType {
+	case BTreeV2TypeLinkName:
+		l = btreeV2Layout{size: 11, heapIDAt: 4, heapIDLen: 7}
+	case BTreeV2TypeAttributeName:
+		l = btreeV2Layout{size: 17, heapIDAt: 0, heapIDLen: 8}
+	default:
+		return l, fmt.Errorf("unsupported b-tree v2 record type %d; only 5 (link name) and 8 (attribute name) are read", recordType)
+	}
+	if recordSize != 0 && recordSize != l.size {
+		return l, fmt.Errorf("b-tree v2 type %d declares a record size of %d bytes, want %d", recordType, recordSize, l.size)
+	}
+	return l, nil
 }
 
 // fractalHeapHeaderRaw represents a minimal fractal heap header.
@@ -823,7 +866,11 @@ func computeOffsetSize(value uint64) uint8 {
 //   - Byte 0: Version (bits 4-7) and Type (bits 0-3)
 //   - Bytes 1-4: Offset (uint32, little-endian)
 //   - Bytes 5-6: Length (uint16, little-endian)
-func parseHeapID(heapID [7]byte, header *fractalHeapHeaderRaw) (offset, length uint64, err error) {
+func parseHeapID(heapID []byte, header *fractalHeapHeaderRaw) (offset, length uint64, err error) {
+	// Seven bytes for a link name record, eight for an attribute name record. Anything shorter cannot carry the type bits plus an offset and a length.
+	if len(heapID) < 3 {
+		return 0, 0, fmt.Errorf("heap ID is %d bytes, too short to parse", len(heapID))
+	}
 	// Check type (bits 4-5 of byte 0, per HDF5 format spec)
 	heapType := (heapID[0] & 0x30) >> 4
 	if heapType != 0 {

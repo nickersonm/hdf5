@@ -144,15 +144,14 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		}
 	}
 
-	// Parse attributes from messages (both compact and dense)
+	// Parse attributes from messages (both compact and dense).
+	//
+	// A failure here is returned rather than discarded. It used to be swallowed, on the reasoning that attributes are optional -- but "this object has no attributes" and "this object's attributes could not be read" are different answers, and collapsing them reported the first when the second was true. An object with no attributes does not reach this error path at all: ParseAttributesFromMessages returns an empty list and no error when there is nothing to parse.
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
 	if err != nil {
-		// Don't fail the whole header read if attributes fail
-		// Attributes are optional - continue without them
-		_ = err
-	} else {
-		header.Attributes = attributes
+		return nil, fmt.Errorf("reading attributes of the object at 0x%X: %w", address, err)
 	}
+	header.Attributes = attributes
 
 	return header, nil
 }

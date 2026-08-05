@@ -739,103 +739,119 @@ func TestReadBTreeV2HeaderRaw_4ByteOffsets(t *testing.T) {
 // Binary parsing tests for readBTreeV2LeafRecords
 // ---------------------------------------------------------------------------
 
-func TestReadBTreeV2LeafRecords_Valid(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
+// A dense ATTRIBUTE name index is B-tree v2 type 8 with 17-byte records: an 8-byte heap ID, a
+// 1-byte message flags field, a 4-byte creation order and a 4-byte name hash. It is NOT the type 5
+// link-name layout of a 4-byte hash followed by a 7-byte heap ID.
+//
+// These fixtures used to declare type 8 in the header and then write 11-byte link records into it,
+// which is the same confusion the reader and writer both had: it round-tripped against a parser
+// making the identical mistake and matched nothing the reference library writes.
+func attrLeaf(t *testing.T, heapIDs [][8]byte) []byte {
+	t.Helper()
+	const recordSize = 17
+	buf := make([]byte, 6+len(heapIDs)*recordSize+4)
+	copy(buf, "BTLF")
+	buf[4] = 0 // version
+	buf[5] = 8 // type: attribute name index
+	off := 6
+	for i, id := range heapIDs {
+		copy(buf[off:off+8], id[:])
+		buf[off+8] = 0                                                            // message flags
+		binary.LittleEndian.PutUint32(buf[off+9:off+13], uint32(i))               // creation order
+		binary.LittleEndian.PutUint32(buf[off+13:off+17], 0x11111111*uint32(i+1)) // name hash
+		off += recordSize
 	}
+	return buf
+}
 
-	numRecords := uint16(3)
-	// Each record: 4 bytes hash + 7 bytes heap ID = 11 bytes.
-	// Header: 4 (sig) + 1 (ver) + 1 (type) = 6 bytes.
-	// Checksum: 4 bytes.
-	bufSize := 6 + int(numRecords)*11 + 4
-	buf := make([]byte, bufSize)
+func TestReadBTreeV2LeafRecords_Valid(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
 
-	offset := 0
-	copy(buf[offset:], "BTLF")
-	offset += 4
-	buf[offset] = 0 // version
-	offset++
-	buf[offset] = 8 // type
-	offset++
+	want := [][8]byte{
+		{0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00},
+		{0x00, 0x30, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00},
+		{0x00, 0x50, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00},
+	}
+	reader := bytes.NewReader(attrLeaf(t, want))
 
-	// Record 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0x11111111) // hash
-	offset += 4
-	heapID0 := [7]byte{0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID0[:])
-	offset += 7
-
-	// Record 1
-	binary.LittleEndian.PutUint32(buf[offset:], 0x22222222)
-	offset += 4
-	heapID1 := [7]byte{0x00, 0x30, 0x00, 0x40, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID1[:])
-	offset += 7
-
-	// Record 2
-	binary.LittleEndian.PutUint32(buf[offset:], 0x33333333)
-	offset += 4
-	heapID2 := [7]byte{0x00, 0x50, 0x00, 0x60, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID2[:])
-
-	reader := bytes.NewReader(buf)
-
-	heapIDs, err := readBTreeV2LeafRecords(reader, 0, numRecords, sb)
+	heapIDs, err := readBTreeV2LeafRecords(reader, 0, uint16(len(want)), BTreeV2TypeAttributeName, 17, sb)
 	require.NoError(t, err)
-	require.Len(t, heapIDs, 3)
-	require.Equal(t, heapID0, heapIDs[0])
-	require.Equal(t, heapID1, heapIDs[1])
-	require.Equal(t, heapID2, heapIDs[2])
+	require.Len(t, heapIDs, len(want))
+	for i := range want {
+		require.Equal(t, want[i][:], heapIDs[i])
+	}
+}
+
+// TestReadBTreeV2LeafRecords_LinkLayout covers the other record kind through the same parser, so
+// that the two cannot drift into one.
+func TestReadBTreeV2LeafRecords_LinkLayout(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
+
+	buf := make([]byte, 6+11+4)
+	copy(buf, "BTLF")
+	buf[4] = 0
+	buf[5] = 5 // type: link name index
+	binary.LittleEndian.PutUint32(buf[6:10], 0xDEADBEEF)
+	want := []byte{0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00}
+	copy(buf[10:17], want)
+
+	heapIDs, err := readBTreeV2LeafRecords(bytes.NewReader(buf), 0, 1, BTreeV2TypeLinkName, 11, sb)
+	require.NoError(t, err)
+	require.Len(t, heapIDs, 1)
+	require.Equal(t, want, heapIDs[0])
+}
+
+// TestReadBTreeV2LeafRecords_TypeMismatch pins the check that makes the layout selection safe: a
+// leaf whose own type byte disagrees with the header's means one of the two addresses is wrong, and
+// reading on regardless is exactly how a wrong layout becomes plausible garbage instead of an error.
+func TestReadBTreeV2LeafRecords_TypeMismatch(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, Endianness: binary.LittleEndian}
+	buf := attrLeaf(t, [][8]byte{{1, 2, 3, 4, 5, 6, 7, 8}})
+
+	_, err := readBTreeV2LeafRecords(bytes.NewReader(buf), 0, 1, BTreeV2TypeLinkName, 11, sb)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "type")
+}
+
+// TestBTreeV2RecordLayoutRejectsUnknownTypes pins that an unrecognised index is refused rather than
+// read as links, which is what the parser did for every type before.
+func TestBTreeV2RecordLayoutRejectsUnknownTypes(t *testing.T) {
+	for _, typ := range []uint8{0, 1, 6, 9, 200} {
+		if _, err := btreeV2RecordLayout(typ, 0); err == nil {
+			t.Errorf("b-tree v2 type %d was accepted", typ)
+		}
+	}
+	// And a declared record size that disagrees with the layout is refused too.
+	if _, err := btreeV2RecordLayout(BTreeV2TypeAttributeName, 11); err == nil {
+		t.Error("an attribute index declaring 11-byte records was accepted")
+	}
 }
 
 func TestReadBTreeV2LeafRecords_InvalidSignature(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
+	sb := &Superblock{OffsetSize: 8, Endianness: binary.LittleEndian}
 
 	buf := make([]byte, 40)
 	copy(buf[0:4], "XXXX")
 
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2LeafRecords(reader, 0, 1, sb)
+	_, err := readBTreeV2LeafRecords(bytes.NewReader(buf), 0, 1, BTreeV2TypeAttributeName, 17, sb)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid B-tree v2 leaf signature")
 }
 
 func TestReadBTreeV2LeafRecords_ZeroRecords(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
+	sb := &Superblock{OffsetSize: 8, Endianness: binary.LittleEndian}
 
-	bufSize := 6 + 4 // header + checksum, no records
-	buf := make([]byte, bufSize)
-	copy(buf[0:4], "BTLF")
-	buf[4] = 0 // version
-	buf[5] = 8 // type
-
-	reader := bytes.NewReader(buf)
-
-	heapIDs, err := readBTreeV2LeafRecords(reader, 0, 0, sb)
+	buf := attrLeaf(t, nil)
+	heapIDs, err := readBTreeV2LeafRecords(bytes.NewReader(buf), 0, 0, BTreeV2TypeAttributeName, 17, sb)
 	require.NoError(t, err)
 	require.Len(t, heapIDs, 0)
 }
 
 func TestReadBTreeV2LeafRecords_TooShort(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
+	sb := &Superblock{OffsetSize: 8, Endianness: binary.LittleEndian}
 
 	buf := make([]byte, 5) // Too short
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2LeafRecords(reader, 0, 1, sb)
+	_, err := readBTreeV2LeafRecords(bytes.NewReader(buf), 0, 1, BTreeV2TypeAttributeName, 17, sb)
 	require.Error(t, err)
 }
 
@@ -1150,7 +1166,8 @@ func TestReadDenseAttributes_EmptyBTreeLeaf(t *testing.T) {
 	buf[bthdOffset+4] = 0 // version
 	buf[bthdOffset+5] = 8 // type
 	binary.LittleEndian.PutUint32(buf[bthdOffset+6:], 4096)
-	binary.LittleEndian.PutUint16(buf[bthdOffset+10:], 11)
+	// 17, not 11: a type 8 attribute-name record is an 8-byte heap ID, 1-byte flags, 4-byte creation order and 4-byte hash. Declaring the link record size here is what the reader used to assume for every type.
+	binary.LittleEndian.PutUint16(buf[bthdOffset+10:], 17)
 	binary.LittleEndian.PutUint16(buf[bthdOffset+12:], 0) // depth
 	buf[bthdOffset+14] = 75
 	buf[bthdOffset+15] = 40
