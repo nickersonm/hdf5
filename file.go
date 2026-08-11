@@ -15,7 +15,11 @@ import (
 
 // File represents an open HDF5 file with its metadata and root group.
 type File struct {
-	osFile        *os.File
+	osFile *os.File
+
+	// reader is what every read goes through, and it is NOT always osFile. A file carrying a user block has its superblock at 512, 1024 or a further power-of-two offset, and every address inside the file is relative to that superblock rather than to byte zero. Wrapping the os.File in a SectionReader based there means the whole library below this point is unchanged: it keeps reading as though the superblock were at zero, because as far as it can see it is.
+	reader utils.ReaderAt
+
 	sb            *core.Superblock
 	root          *Group
 	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
@@ -30,13 +34,7 @@ func Open(filename string) (*File, error) {
 		return nil, utils.WrapError("file open failed", err)
 	}
 
-	// Verify HDF5 signature before reading superblock.
-	if !isHDF5File(f) {
-		_ = f.Close()
-		return nil, errors.New("not an HDF5 file")
-	}
-
-	// Get file size for address validation.
+	// Get file size for address validation, and to bound the user-block search below.
 	fi, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
@@ -44,7 +42,20 @@ func Open(filename string) (*File, error) {
 	}
 	fileSize := fi.Size()
 
-	sb, err := core.ReadSuperblock(f)
+	// The superblock is not necessarily at byte zero. The format specification says to locate it by searching byte offset 0, then 512, then each successive power-of-two multiple -- the space before it is the user block, which exists so an HDF5 file can be wrapped in another format or carry a descriptive header. A MATLAB v7.3 .mat file is exactly that case: it is an HDF5 file behind a 512-byte header, so a reader that only checks offset zero rejects every one of them as "not an HDF5 file".
+	userBlock, ok := findSuperblock(f, fileSize)
+	if !ok {
+		_ = f.Close()
+		return nil, errors.New("not an HDF5 file")
+	}
+
+	var reader utils.ReaderAt = f
+	if userBlock > 0 {
+		// Addresses inside the file are relative to the superblock, so offsetting here is what keeps every address computation below this point correct without changing any of them.
+		reader = io.NewSectionReader(f, userBlock, fileSize-userBlock)
+	}
+
+	sb, err := core.ReadSuperblock(reader)
 	if err != nil {
 		_ = f.Close()
 		return nil, utils.WrapError("superblock read failed", err)
@@ -52,6 +63,7 @@ func Open(filename string) (*File, error) {
 
 	file := &File{
 		osFile:        f,
+		reader:        reader,
 		sb:            sb,
 		visitedBTrees: make(map[uint64]bool),
 	}
@@ -78,14 +90,24 @@ func Open(filename string) (*File, error) {
 }
 
 // isHDF5File verifies HDF5 file signature.
-func isHDF5File(r utils.ReaderAt) bool {
+// findSuperblock returns the byte offset of the HDF5 signature, searching the offsets the format specification permits: 0, 512, 1024, 2048 and so on, each twice the last.
+//
+// The bound is the file size rather than a fixed number of attempts, so a large file with an unusually big user block is still found and a small one stops immediately. A signature at offset 0 is the overwhelmingly common case and costs one read.
+func findSuperblock(r utils.ReaderAt, fileSize int64) (offset int64, ok bool) {
 	buf := utils.GetBuffer(8)
 	defer utils.ReleaseBuffer(buf)
 
-	if _, err := r.ReadAt(buf, 0); err != nil {
-		return false
+	for off := int64(0); off+8 <= fileSize; {
+		if _, err := r.ReadAt(buf, off); err == nil && string(buf) == core.Signature {
+			return off, true
+		}
+		if off == 0 {
+			off = 512
+			continue
+		}
+		off *= 2
 	}
-	return string(buf) == core.Signature
+	return 0, false
 }
 
 // Close closes the HDF5 file and releases associated resources.
@@ -134,9 +156,11 @@ func (f *File) Superblock() *core.Superblock {
 	return f.sb
 }
 
-// Reader returns the underlying file reader for low-level access.
+// Reader returns the reader every address in this file is relative to, for low-level access.
+//
+// On a file with a user block this is NOT the os.File: it is a section of it based at the superblock, so an address read out of the file can be passed straight to it. Returning the raw os.File here would hand callers a reader whose offsets are wrong by the user block size on exactly the files where that is hardest to notice.
 func (f *File) Reader() io.ReaderAt {
-	return f.osFile
+	return f.reader
 }
 
 // readSignature reads 4 bytes at address and returns string.
