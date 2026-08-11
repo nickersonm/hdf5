@@ -125,7 +125,7 @@ func (ds *DatasetWriter) RebalanceAttributeBTree() error {
 		sb := ds.fileWriter.file.Superblock()
 		reader := ds.fileWriter.writer.Reader()
 
-		btree := structures.NewWritableBTreeV2(4096)
+		btree := structures.NewWritableBTreeV2WithType(4096, structures.BTreeV2TypeAttributeName)
 		err := btree.LoadFromFile(reader, ds.denseAttrInfo.BTreeNameIndexAddr, sb)
 		if err != nil {
 			return fmt.Errorf("failed to load B-tree: %w", err)
@@ -169,7 +169,7 @@ func (ds *DatasetWriter) RebalanceAttributeBTree() error {
 	}
 
 	// Load and rebalance B-tree
-	btree := structures.NewWritableBTreeV2(4096)
+	btree := structures.NewWritableBTreeV2WithType(4096, structures.BTreeV2TypeAttributeName)
 	err = btree.LoadFromFile(reader, attrInfo.BTreeNameIndexAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load B-tree: %w", err)
@@ -476,7 +476,7 @@ func writeDenseAttributeWithInfo(fw *FileWriter, _ uint64, _ *core.ObjectHeader,
 	}
 
 	// Load existing B-tree v2 from file
-	btree := structures.NewWritableBTreeV2(4096)
+	btree := structures.NewWritableBTreeV2WithType(4096, structures.BTreeV2TypeAttributeName)
 	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load B-tree: %w", err)
@@ -689,7 +689,7 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 	}
 
 	// Load existing B-tree v2 from file
-	btree := structures.NewWritableBTreeV2(4096)
+	btree := structures.NewWritableBTreeV2WithType(4096, structures.BTreeV2TypeAttributeName)
 	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load B-tree: %w", err)
@@ -764,7 +764,7 @@ func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	}
 
 	// Step 3: Load existing B-tree v2 from file
-	btree := structures.NewWritableBTreeV2(4096) // Match size from dense attribute writer
+	btree := structures.NewWritableBTreeV2WithType(4096, structures.BTreeV2TypeAttributeName) // Match size from dense attribute writer
 	err = btree.LoadFromFile(fw.writer.Reader(), attrInfo.BTreeNameIndexAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load B-tree: %w", err)

@@ -18,6 +18,12 @@ import (
 // Limitations (v0.10.0-beta):
 // - Only direct blocks supported (no indirect blocks)
 // - No huge objects support (objects stored outside heap)
+
+// UndefinedAddress is HDF5's "this address is not set" value: all bits one, truncated to the file's
+// offset size. It is NOT zero -- zero is the address of the superblock -- so a structure that means
+// "absent" and writes zero is pointing the reader at the start of the file.
+const UndefinedAddress = ^uint64(0)
+
 // - No tiny objects optimization
 // - Objects must be < max_direct_size.
 type FractalHeap struct {
@@ -412,6 +418,16 @@ func (fh *FractalHeap) readManagedObject(id *HeapID) ([]byte, error) {
 	}
 
 	relativeOffset := id.Offset - dblock.BlockOffset
+
+	// dblock.Data begins after the block header, while a heap offset includes it.
+	blockHeaderSize := uint64(4 + 1 + int(fh.sizeofAddr) + int(fh.Header.HeapOffsetSize))
+	if fh.Header.ChecksumDirectBlocks {
+		blockHeaderSize += 4
+	}
+	if relativeOffset < blockHeaderSize {
+		return nil, fmt.Errorf("object offset 0x%X lands inside the direct block header (%d bytes)", id.Offset, blockHeaderSize)
+	}
+	relativeOffset -= blockHeaderSize
 
 	if relativeOffset > uint64(len(dblock.Data)) {
 		return nil, fmt.Errorf("object offset 0x%X beyond block data (size: %d)", relativeOffset, len(dblock.Data))

@@ -266,8 +266,8 @@ func TestBTreeV2_MergeNodes(t *testing.T) {
 		Version:   0,
 		Type:      BTreeV2TypeLinkNameIndex,
 		Records: []LinkNameRecord{
-			{NameHash: 100, HeapID: [7]byte{1, 0, 0, 0, 0, 0, 0}},
-			{NameHash: 200, HeapID: [7]byte{2, 0, 0, 0, 0, 0, 0}},
+			{NameHash: 100, HeapID: [8]byte{1, 0, 0, 0, 0, 0, 0}},
+			{NameHash: 200, HeapID: [8]byte{2, 0, 0, 0, 0, 0, 0}},
 		},
 	}
 
@@ -276,8 +276,8 @@ func TestBTreeV2_MergeNodes(t *testing.T) {
 		Version:   0,
 		Type:      BTreeV2TypeLinkNameIndex,
 		Records: []LinkNameRecord{
-			{NameHash: 300, HeapID: [7]byte{3, 0, 0, 0, 0, 0, 0}},
-			{NameHash: 400, HeapID: [7]byte{4, 0, 0, 0, 0, 0, 0}},
+			{NameHash: 300, HeapID: [8]byte{3, 0, 0, 0, 0, 0, 0}},
+			{NameHash: 400, HeapID: [8]byte{4, 0, 0, 0, 0, 0, 0}},
 		},
 	}
 
@@ -315,7 +315,7 @@ func TestBTreeV2_RedistributeRecords(t *testing.T) {
 	for i := range leftRecords {
 		leftRecords[i] = LinkNameRecord{
 			NameHash: uint32(i * 100),
-			HeapID:   [7]byte{byte(i), 0, 0, 0, 0, 0, 0},
+			HeapID:   [8]byte{byte(i), 0, 0, 0, 0, 0, 0},
 		}
 	}
 
@@ -323,7 +323,7 @@ func TestBTreeV2_RedistributeRecords(t *testing.T) {
 	for i := range rightRecords {
 		rightRecords[i] = LinkNameRecord{
 			NameHash: uint32((10 + i) * 100),
-			HeapID:   [7]byte{byte(10 + i), 0, 0, 0, 0, 0, 0},
+			HeapID:   [8]byte{byte(10 + i), 0, 0, 0, 0, 0, 0},
 		}
 	}
 
@@ -371,16 +371,16 @@ func TestBTreeV2_BorrowFromLeft(t *testing.T) {
 	// Left sibling has spare records
 	left := &BTreeV2LeafNode{
 		Records: []LinkNameRecord{
-			{NameHash: 100, HeapID: [7]byte{1}},
-			{NameHash: 200, HeapID: [7]byte{2}},
-			{NameHash: 300, HeapID: [7]byte{3}},
+			{NameHash: 100, HeapID: [8]byte{1}},
+			{NameHash: 200, HeapID: [8]byte{2}},
+			{NameHash: 300, HeapID: [8]byte{3}},
 		},
 	}
 
 	// Current node is sparse
 	current := &BTreeV2LeafNode{
 		Records: []LinkNameRecord{
-			{NameHash: 400, HeapID: [7]byte{4}},
+			{NameHash: 400, HeapID: [8]byte{4}},
 		},
 	}
 
@@ -413,16 +413,16 @@ func TestBTreeV2_BorrowFromRight(t *testing.T) {
 	// Current node is sparse
 	current := &BTreeV2LeafNode{
 		Records: []LinkNameRecord{
-			{NameHash: 100, HeapID: [7]byte{1}},
+			{NameHash: 100, HeapID: [8]byte{1}},
 		},
 	}
 
 	// Right sibling has spare records
 	right := &BTreeV2LeafNode{
 		Records: []LinkNameRecord{
-			{NameHash: 200, HeapID: [7]byte{2}},
-			{NameHash: 300, HeapID: [7]byte{3}},
-			{NameHash: 400, HeapID: [7]byte{4}},
+			{NameHash: 200, HeapID: [8]byte{2}},
+			{NameHash: 300, HeapID: [8]byte{3}},
+			{NameHash: 400, HeapID: [8]byte{4}},
 		},
 	}
 

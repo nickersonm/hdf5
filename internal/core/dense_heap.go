@@ -31,7 +31,7 @@ func ReadDenseHeapObjects(r io.ReaderAt, btreeAddr, heapAddr uint64, sb *Superbl
 		return nil, fmt.Errorf("btree v2 depth %d unsupported (only depth=0 leaf-root)", btreeHeader.Depth)
 	}
 
-	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, sb)
+	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, btreeHeader.Type, btreeHeader.RecordSize, sb)
 	if err != nil {
 		return nil, fmt.Errorf("btree v2 leaf: %w", err)
 	}
