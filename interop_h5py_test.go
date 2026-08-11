@@ -185,3 +185,75 @@ func firstFloat(v interface{}) float64 {
 	}
 	return 0
 }
+
+// TestCompressedDatasetsAreReadableByTheReferenceLibrary covers the filter pipeline.
+//
+// WithGZIPCompression worked spectacularly on the write side and produced files nothing could
+// open: the pipeline message was stamped version 2 while carrying the version 1 layout, so a
+// conforming reader started the first filter at byte 2, read the six version 1 reserved bytes as
+// the filter identifier, and got filter ID 0. Version 1 also pads the client-data section to a
+// multiple of eight, which deflate's single level value makes the common case.
+//
+// Two further defects were behind that one, and both were found by this test rather than by any
+// round trip: version 1 stores the filter name length ALREADY PADDED to a multiple of eight, and
+// HDF5 filter 1 is DEFLATE in the ZLIB container rather than in the GZIP one that compress/gzip
+// writes. Each produced a different, precise complaint from the reference library.
+//
+// Compressing well is not the property worth testing. Being readable is -- so this asserts both,
+// and the size check doubles as the guard against the filter being silently skipped.
+func TestCompressedDatasetsAreReadableByTheReferenceLibrary(t *testing.T) {
+	requireH5py(t)
+	path := filepath.Join(t.TempDir(), "gzip.h5")
+
+	// Smooth and repetitive, so the filter has something to find and a failure to compress is
+	// visible as well as a failure to decompress.
+	want := make([]float64, 4096)
+	for i := range want {
+		want[i] = float64(i%64) * 0.5
+	}
+
+	fw, err := hdf5.CreateForWrite(path, hdf5.CreateTruncate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Chunking is not optional: HDF5 filters only apply to chunked storage, and WithGZIPCompression
+	// on a contiguous dataset is silently ignored -- the file is written uncompressed with no
+	// filter pipeline and no error. The size assertion below is what catches that.
+	ds, err := fw.CreateDataset("/compressed", hdf5.Float64, []uint64{uint64(len(want))},
+		hdf5.WithChunkDims([]uint64{512}), hdf5.WithGZIPCompression(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ds.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	ds.Close()
+	if err := fw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := int64(len(want) * 8)
+	if info.Size() >= raw {
+		t.Errorf("the file is %d bytes against %d bytes of raw data; nothing was compressed", info.Size(), raw)
+	}
+
+	got := readWithH5py(t, path)
+	sets, _ := got["datasets"].(map[string]interface{})
+	vals, ok := sets["compressed"].([]interface{})
+	if !ok {
+		t.Fatalf("the reference library reports no /compressed dataset; it saw %v", keysOf(sets))
+	}
+	if len(vals) != len(want) {
+		t.Fatalf("read %d values, want %d", len(vals), len(want))
+	}
+	for i := range want {
+		if v, _ := vals[i].(float64); v != want[i] {
+			t.Fatalf("value %d reads %v, want %v", i, vals[i], want[i])
+		}
+	}
+	t.Logf("%d bytes on disk against %d raw, and every value round-trips through the reference library", info.Size(), raw)
+}

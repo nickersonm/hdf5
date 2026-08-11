@@ -134,10 +134,15 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 		return nil, errors.New("empty filter pipeline")
 	}
 
-	// Pipeline message format (version 2):
-	// Bytes 0:    Version (1 byte) = 2
+	// Pipeline message format (version 1):
+	// Bytes 0:    Version (1 byte) = 1
 	// Bytes 1:    Number of filters (1 byte)
 	// Bytes 2-7:  Reserved (6 bytes, must be 0)
+	//
+	// The six reserved bytes and the always-present filter name below are VERSION 1 layout.
+	// Version 2 has neither: no reserved bytes, and the name is omitted for filter IDs under 256.
+	// Stamping version 2 on this layout makes a conforming reader start the first filter at byte 2
+	// and read the reserved zeros as its identifier, yielding filter ID 0.
 	//
 	// For each filter:
 	//   Filter ID (2 bytes)
@@ -149,7 +154,7 @@ func (fp *FilterPipeline) EncodePipelineMessage() ([]byte, error) {
 
 	buf := make([]byte, 0, 8+len(fp.filters)*32) // Pre-allocate for header + filters
 	header := make([]byte, 8)
-	header[0] = 2                     // Version 2
+	header[0] = 1                     // Version 1: matches the layout written below
 	header[1] = byte(len(fp.filters)) //nolint:gosec // G115: filter count bounded by HDF5 format
 	// Reserved bytes 2-7 are already zero
 	buf = append(buf, header...)
@@ -174,13 +179,25 @@ func encodeFilter(f Filter) []byte {
 		paddedNameLen = ((nameLen + 7) / 8) * 8
 	}
 
+	// Version 1 pads the client-data section to a multiple of eight bytes, so an odd number of
+	// 4-byte values carries four bytes of padding. deflate's single compression-level value makes
+	// this the common case rather than an edge one.
+	cdPad := 0
+	if len(cdValues)%2 == 1 {
+		cdPad = 4
+	}
+
 	// Calculate buffer size
-	bufSize := 8 + int(paddedNameLen) + len(cdValues)*4
+	bufSize := 8 + int(paddedNameLen) + len(cdValues)*4 + cdPad
 	buf := make([]byte, bufSize)
 
 	// Filter header (8 bytes)
+	//
+	// Version 1 stores the name length ALREADY PADDED to a multiple of eight, not the raw length
+	// of the string. Writing the raw length is rejected by a conforming reader with "filter name
+	// length is not a multiple of eight". Zero still means no name.
 	binary.LittleEndian.PutUint16(buf[0:2], uint16(f.ID()))
-	binary.LittleEndian.PutUint16(buf[2:4], nameLen)
+	binary.LittleEndian.PutUint16(buf[2:4], paddedNameLen)
 	binary.LittleEndian.PutUint16(buf[4:6], flags)
 	binary.LittleEndian.PutUint16(buf[6:8], uint16(len(cdValues))) //nolint:gosec // G115: HDF5 limits CD values array to uint16
 
