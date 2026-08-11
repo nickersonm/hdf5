@@ -62,7 +62,7 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
-	MsgAttributeInfo  MessageType = 15 // Attribute Info (0x000F) - for dense attribute storage
+	MsgAttributeInfo  MessageType = 21 // Corrected: Attribute Info is 0x0015. 0x000F is Shared Message Table.
 	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6

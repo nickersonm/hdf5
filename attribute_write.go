@@ -1223,10 +1223,18 @@ func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 		return nil, nil, fmt.Errorf("not a float type")
 	}
 
+	// Bits 8-15 of a float datatype's class bit field are the SIGN BIT LOCATION and bit 5 is the
+	// mantissa normalization; leaving them zero places the sign bit on top of the mantissa, which
+	// the reference library rejects with "mantissa and sign positions overlap". These are the same
+	// values dataset_write.go already uses for the identical types.
+	classBits := uint32(0x3F20) // sign at bit 63, mantissa MSB implied
+	if size == 4 {
+		classBits = 0x1F20 // sign at bit 31, mantissa MSB implied
+	}
 	dt := &core.DatatypeMessage{
 		Class:         core.DatatypeFloat,
 		Size:          size,
-		ClassBitField: 0, // Little-endian
+		ClassBitField: classBits,
 	}
 
 	ds := &core.DataspaceMessage{
